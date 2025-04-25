@@ -1,0 +1,47 @@
+name: Build DwarFS Ubuntu 20.04 Image
+
+on:
+  push:
+    branches: [ "main" ] # Trigger on push to main branch
+  workflow_dispatch:     # Allow manual triggering from GitHub UI
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository # Optional, but good practice
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debootstrap wget
+
+      - name: Create Target Directory
+        run: mkdir 20.04
+
+      - name: Run Debootstrap for Ubuntu 20.04 (Focal)
+        run: |
+          echo "Starting debootstrap... This might take a while."
+          sudo debootstrap --arch=amd64 focal ./20.04/ http://archive.ubuntu.com/ubuntu/
+          echo "Debootstrap finished."
+        # Note: Added the mirror URL, which is often required by debootstrap.
+
+      - name: Download DwarFS Tool
+        run: wget https://github.com/mhx/dwarfs/releases/download/v0.12.3/dwarfs-universal-0.12.3-Linux-x86_64
+
+      - name: Make DwarFS Tool Executable
+        run: chmod +x dwarfs-universal-0.12.3-Linux-x86_64
+
+      - name: Create DwarFS Image
+        run: |
+          echo "Starting mkdwarfs... This might also take a while."
+          sudo ./dwarfs-universal-0.12.3-Linux-x86_64 --tool=mkdwarfs -l 9 -S27 -W12 -w4 -B128 -N1 -i 20.04/ -o 20.04.dwarf
+          echo "mkdwarfs finished."
+
+      - name: Upload DwarFS Image Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-20.04-dwarfs-image # Name of the artifact bundle in GitHub
+          path: 20.04.dwarf             # Path to the file to upload
+          if-no-files-found: error      # Fail the step if the file isn't found
