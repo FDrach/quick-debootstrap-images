@@ -1,16 +1,33 @@
-name: Build DwarFS Ubuntu 20.04 Image
+name: Build Ubuntu DwarFS and SquashFS Images
 
 on:
-  push:
-    branches: [ "main" ] # Trigger on push to main branch
-  workflow_dispatch:     # Allow manual triggering from GitHub UI
+  workflow_dispatch:
+    inputs:
+      ubuntu_version:
+        description: 'Ubuntu version number (e.g., 20.04, 22.04)'
+        required: true
+        default: '20.04'
+        type: string
+      ubuntu_codename:
+        description: 'Ubuntu codename (e.g., focal, jammy)'
+        required: true
+        default: 'focal'
+        type: string
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write # Needed to create releases and tags
+
     steps:
-      - name: Checkout repository # Optional, but good practice
+      - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Print Input Parameters
+        run: |
+          echo "Using Ubuntu Version: ${{ github.event.inputs.ubuntu_version }}"
+          echo "Using Ubuntu Codename: ${{ github.event.inputs.ubuntu_codename }}"
 
       - name: Install Dependencies
         run: |
@@ -18,14 +35,14 @@ jobs:
           sudo apt-get install -y debootstrap wget
 
       - name: Create Target Directory
-        run: mkdir 20.04
+        run: mkdir ${{ github.event.inputs.ubuntu_version }}
 
-      - name: Run Debootstrap for Ubuntu 20.04 (Focal)
+      - name: Run Debootstrap for Ubuntu ${{ github.event.inputs.ubuntu_version }} (${{ github.event.inputs.ubuntu_codename }})
         run: |
-          echo "Starting debootstrap... This might take a while."
-          sudo debootstrap --arch=amd64 focal ./20.04/ http://archive.ubuntu.com/ubuntu/
+          set -e # Exit immediately if a command exits with a non-zero status.
+          echo "Starting debootstrap for ${{ github.event.inputs.ubuntu_version }} (${{ github.event.inputs.ubuntu_codename }})... This might take a while."
+          sudo debootstrap --arch=amd64 ${{ github.event.inputs.ubuntu_codename }} ./${{ github.event.inputs.ubuntu_version }}/ http://archive.ubuntu.com/ubuntu/
           echo "Debootstrap finished."
-        # Note: Added the mirror URL, which is often required by debootstrap.
 
       - name: Download DwarFS Tool
         run: wget https://github.com/mhx/dwarfs/releases/download/v0.12.3/dwarfs-universal-0.12.3-Linux-x86_64
@@ -33,15 +50,41 @@ jobs:
       - name: Make DwarFS Tool Executable
         run: chmod +x dwarfs-universal-0.12.3-Linux-x86_64
 
-      - name: Create DwarFS Image
+      - name: Create DwarFS Image (${{ github.event.inputs.ubuntu_version }}.dwarf)
         run: |
-          echo "Starting mkdwarfs... This might also take a while."
-          sudo ./dwarfs-universal-0.12.3-Linux-x86_64 --tool=mkdwarfs -l 9 -S27 -W12 -w4 -B128 -N1 -i 20.04/ -o 20.04.dwarf
+          set -e
+          echo "Starting mkdwarfs for ${{ github.event.inputs.ubuntu_version }}... This might also take a while."
+          sudo ./dwarfs-universal-0.12.3-Linux-x86_64 --tool=mkdwarfs -l 9 -S27 -W12 -w4 -B128 -N1 -i ${{ github.event.inputs.ubuntu_version }}/ -o ${{ github.event.inputs.ubuntu_version }}.dwarf
           echo "mkdwarfs finished."
 
-      - name: Upload DwarFS Image Artifact
-        uses: actions/upload-artifact@v4
+      - name: Download Static mksquashfs
+        run: wget https://github.com/VHSgunzo/squashfs-tools-static/releases/download/v4.6.1/mksquashfs-x86_64
+
+      - name: Make mksquashfs Executable
+        run: chmod +x mksquashfs-x86_64
+
+      - name: Create SquashFS Image (${{ github.event.inputs.ubuntu_version }}.sqsh)
+        run: |
+          set -e
+          echo "Starting mksquashfs for ${{ github.event.inputs.ubuntu_version }}..."
+          # Using sudo because debootstrap creates files owned by root
+          sudo ./mksquashfs-x86_64 "${{ github.event.inputs.ubuntu_version }}" "${{ github.event.inputs.ubuntu_version }}.sqsh" -b 1048576 -comp xz -Xdict-size 100%
+          echo "mksquashfs finished."
+
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v2
+        # This action creates a release if the tag doesn't exist,
+        # or updates an existing release.
+        env:
+           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Provided by Actions, needs 'contents: write' permission
         with:
-          name: ubuntu-20.04-dwarfs-image # Name of the artifact bundle in GitHub
-          path: 20.04.dwarf             # Path to the file to upload
-          if-no-files-found: error      # Fail the step if the file isn't found
+          tag_name: ubuntu-${{ github.event.inputs.ubuntu_version }}-build-${{ github.run_id }} # Unique tag name based on version input
+          name: Ubuntu ${{ github.event.inputs.ubuntu_version }} (${{ github.event.inputs.ubuntu_codename }}) Images Build ${{ github.run_id }} # Release title using both inputs
+          body: |
+            Automated build of DwarFS and SquashFS images for Ubuntu ${{ github.event.inputs.ubuntu_version }} (${{ github.event.inputs.ubuntu_codename }}).
+            Triggered by workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          files: |
+            ${{ github.event.inputs.ubuntu_version }}.dwarf
+            ${{ github.event.inputs.ubuntu_version }}.sqsh
+          draft: false       # Set to true if you want to manually publish the release
+          prerelease: false # Set to true if this is a pre-release
